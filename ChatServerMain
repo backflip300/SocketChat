@@ -1,0 +1,283 @@
+package work;
+
+import java.awt.Color;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.ArrayList;
+import java.util.NoSuchElementException;
+import java.util.Scanner;
+
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JTextField;
+
+import net.miginfocom.swing.MigLayout;
+
+public class ChatServerMain {
+
+	JFrame mFrame;
+	ServerSocket mServerSocket;
+	ScrollTextArea mChatArea;
+	ScrollTextArea mUsersArea;
+	Thread mWelcomeThread;
+	ArrayList<ClientData> mClients;
+
+	public class ClientData implements Runnable {
+		Socket mSocket;
+		Scanner mClientIn; // client to server
+		PrintStream mServerOut; // server to client
+		String mName;
+		Thread mThread;
+		boolean mIsAdmin;
+
+		ClientData(Socket socket) {
+			mSocket = socket;
+			mChatArea.appendToOutput("Creating new client...\n", Color.GRAY,
+					true);
+			try {
+				mClientIn = new Scanner(mSocket.getInputStream());
+				mServerOut = new PrintStream(mSocket.getOutputStream());
+			} catch (IOException e) {
+				e.printStackTrace();
+				mChatArea.appendToOutput("Error while connecting new user!",
+						Color.RED, true);
+				mChatArea.appendToOutput(e.getLocalizedMessage(), Color.RED,
+						true);
+			}
+			mChatArea.appendToOutput(
+					"Client connection streams established...\n", Color.GRAY,
+					true);
+			mName = "";
+
+			mThread = new Thread(this);
+			mThread.start();
+		}
+
+		public void disconnect(String msg) {
+			mServerOut.println(msg);
+			mClients.remove(this);
+			mChatArea.appendToOutput(this.mName
+					+ " forceably disconected with msg: " + msg + "\n",
+					Color.MAGENTA, true);
+			broadcast(this.mName + " has been kicked from the server!");
+			broadcast("<Server> " + getNowOnline());
+			updateClientList();
+			mThread.stop();
+		}
+
+		@Override
+		public void run() {
+			mChatArea.appendToOutput(
+					"Client thread started, listening for username\n",
+					Color.GRAY, true);
+			do {
+				String input = "";
+				try {
+					input = mClientIn.nextLine();
+				} catch (NoSuchElementException e) {
+					// then user disconnected before sending user name request
+					mThread.stop();
+				}
+				if (input.charAt(0) == 'J' && input.charAt(1) == ':') {
+					// then it is a join request
+					String name = input.substring(2, input.length());
+					mChatArea.appendToOutput("Client requested username \""
+							+ name + "\"\n", Color.GRAY, true);
+					// check name is valid, if so add them to the server
+					if (isNameValid(name)) {
+						mServerOut.println("Y");
+						mChatArea.appendToOutput(
+								"Client joined with  username \"" + name
+										+ "\"\n", Color.GREEN, true);
+						mName = name;
+					} else {
+						mServerOut.println("N");
+						mChatArea.appendToOutput(
+								"Client requested invalid username \"" + name
+										+ "\"\n", Color.RED, true);
+					}
+				}
+			} while (mName == "");
+			mThread.setName(mName);
+			mClients.add(this);
+			updateClientList();
+			broadcast("<Server> " + getNowOnline());
+			try {
+				while (true) {
+					String input = mClientIn.nextLine();
+
+					String msgContents = input.substring(2, input.length());
+					// then incoming message
+					String toPrint = "<" + mName + ">" + msgContents + "\n";
+					mChatArea.appendToOutput(toPrint, Color.BLACK, false);
+					broadcast(toPrint);
+
+				}
+			}
+			// end of msg loop
+			catch (NoSuchElementException e) {
+				// if this is thrown then the client disconnected
+				broadcast("Client " + mName + " disconnected!\n");
+				mChatArea.appendToOutput(
+						"Client " + mName + " disconnected!\n", Color.BLUE,
+						true);
+				mClients.remove(this);
+				updateClientList();
+			}
+
+		}
+	}
+
+	protected void broadcast(String msg) {
+		for (int i = 0; i < mClients.size(); ++i) {
+			mClients.get(i).mServerOut.print(msg);
+		}
+	}
+
+	public static void main(String[] args) {
+		new ChatServerMain();
+	}
+
+	ChatServerMain() {
+		mClients = new ArrayList<ClientData>();
+
+		mFrame = new JFrame("Socket Chat - Server");
+		mFrame.getContentPane().setLayout(new MigLayout());
+		mFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		int port = PortUtil.choosePort();
+
+		// /////////////////////////////////////////////////
+		// Set up server socket
+		try {
+			mServerSocket = new ServerSocket(port);
+		} catch (IOException e) {
+			JOptionPane.showMessageDialog(null,
+					"Failed to initiate server!\nError: " + e.getMessage()
+							+ "\nQuitting program.");
+			e.printStackTrace();
+			System.exit(-1);
+		}
+
+		// /////////////////////////////////////////////////
+		// setup gui
+		mFrame.add(new JLabel("Chat"));
+		mFrame.add(new JLabel("Users"), "wrap");
+
+		JTextField servertext = new JTextField();
+		mFrame.add(servertext, "growx");
+
+		mUsersArea = new ScrollTextArea(300, 512);
+		mFrame.add(mUsersArea, "span 1 3, wrap");
+
+		mChatArea = new ScrollTextArea(512, 512);
+		mFrame.add(mChatArea, "wrap");
+
+		mFrame.add(
+				new JLabel("Server running on local ip "
+						+ mServerSocket.getLocalSocketAddress() + port), "wrap");
+		final JTextField broadcastIn = new JTextField();
+		broadcastIn.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent arg0) {
+				broadcast("<Server>" + broadcastIn.getText() + "\n");
+				broadcastIn.setText("");
+			}
+		});
+
+		// //////////////////////////////////////////
+		// set up welcome thread
+		mWelcomeThread = new Thread(new Runnable() {
+			@Override
+			public void run() {
+				while (true) {
+					try {
+						mChatArea.appendToOutput(
+								"Listening for new users...\n", Color.GRAY,
+								true);
+						Socket sock = mServerSocket.accept();
+						mChatArea.appendToOutput("New connection attempt from "
+								+ sock.getInetAddress() + "\n", Color.GRAY,
+								true);
+						if (checkConnectionAllowed(sock)) {
+							new ClientData(sock); // sit and wait for a
+													// connection, make new
+													// client when one made
+						} else {
+							sock.close();
+						}
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				}
+			}
+		});
+		System.out.println("Starting welcome thread...");
+		mWelcomeThread.start();
+		mFrame.pack();
+		mFrame.setVisible(true);
+	}
+
+	private void updateClientList() {
+		this.mUsersArea.clear();
+		for (int i = 0; i < this.mClients.size(); ++i) {
+			this.mUsersArea.appendToOutput(this.mClients.get(i).mName + "\n",
+					this.mClients.get(i).mIsAdmin ? Color.GREEN : Color.BLACK,
+					true);
+		}
+	}
+
+	private ClientData findClient(String name) {
+		for (ClientData d : this.mClients) {
+			if (d.mName.equals(name)) {
+				return d;
+			}
+		}
+		this.mChatArea.appendToOutput("Tried to find user \"" + name
+				+ "\" but they do not exist!\n", Color.MAGENTA, true);
+		return null;
+	}
+
+	private boolean checkConnectionAllowed(Socket sock) {
+		// check there isn't already a client connected from that machine, if
+		// so, deny connection
+		for (int i = 0; i < this.mClients.size(); ++i) {
+			if (sock.getInetAddress().equals(
+					this.mClients.get(i).mSocket.getInetAddress())) {
+				this.mChatArea.appendToOutput(
+						"Multiple connection attempts from: "
+								+ sock.getInetAddress()
+								+ ", igonoring requests\n", Color.RED, true);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private String getNowOnline() {
+		String result = "Now Online: ";
+		for (int i = 0; i < mClients.size(); ++i) {
+			result += mClients.get(i).mName + ", ";
+		}
+		result += "\n";
+		return result;
+	}
+
+	private boolean isNameValid(String str) {
+		if (this.findClient(str) != null) {
+			// then name in use
+			return false;
+		}
+		if (!str.matches("^[a-zA-Z0-9_]+$")) {
+			// then invalid, name can only be alphanumeric
+			return false;
+		}
+		// if still executing, then valid
+		return true;
+	}
+}
