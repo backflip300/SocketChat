@@ -1,0 +1,129 @@
+package work;
+
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.io.PrintStream;
+import java.net.Socket;
+import java.util.NoSuchElementException;
+import java.util.Scanner;
+
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JScrollPane;
+import javax.swing.JTextField;
+import javax.swing.JTextPane;
+
+import net.miginfocom.swing.MigLayout;
+
+public class ChatClientMain {
+	JTextPane mCompOutputArea;
+	JScrollPane mPanelOutputScroller;
+	Socket mSocket;
+	Scanner mServerIn;
+	PrintStream mClientOut;
+	String mUserName;
+	ScrollTextArea mTextArea;
+
+	public static void main(String[] args) {
+		new ChatClientMain();
+	}
+
+	public void setupNetwork() {
+		mSocket = null;
+		do {
+			String hostname = JOptionPane
+					.showInputDialog("Enter server IP/Name:");
+			int port = PortUtil.choosePort();
+
+			try {
+				mSocket = new Socket(hostname, port);
+				mServerIn = new Scanner(mSocket.getInputStream());
+				mClientOut = new PrintStream(mSocket.getOutputStream());
+			} catch (Exception e) {
+				e.printStackTrace();
+				if (JOptionPane.showConfirmDialog(null,
+						"Error connecting to server!\nError: " + e.getMessage()
+								+ "\n\nTry again?") != 0) {
+					System.exit(0);
+				}
+				mSocket = null;
+			}
+		} while (mSocket == null);
+
+		boolean validUser = false;
+		do {
+			String name = JOptionPane.showInputDialog("Enter Username:");
+			mClientOut.println("J:" + name); // send server join request
+			// wait for reply
+			mUserName = name;
+			validUser = true;
+
+			// server sent invalid reply
+			JOptionPane
+					.showMessageDialog(null,
+							"Server is not following valid protocol! Is it a chat server? Quitting program");
+			System.exit(0);
+
+		} while (!validUser);
+	}
+
+	public ChatClientMain() {
+		this.setupNetwork();
+
+		// ////////////////////////////////////////////////////////////////////////////
+		// create frame
+		JFrame frame = new JFrame("Socket Chat - Client");
+		frame.getContentPane().setLayout(new MigLayout());
+
+		// ////////////////////////////////////////////////////////////////////////////
+		// set up gui
+
+		JLabel textEnterPrompt = new JLabel("Enter Text: ");
+		frame.getContentPane().add(textEnterPrompt, "split 2");
+
+		final JTextField textInputBox = new JTextField();
+		textInputBox.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent arg0) {
+				mClientOut.println("M:" + textInputBox.getText());
+				textInputBox.setText("");
+			}
+		});
+		textInputBox.setMaximumSize(new Dimension(10000, 24));// unlimited
+																// width,
+																// constant
+																// height
+		frame.getContentPane().add(textInputBox, "growx, span, wrap");
+
+		mTextArea = new ScrollTextArea(512, 300);
+		frame.getContentPane().add(mTextArea, "wrap");
+
+		frame.getContentPane().add(
+				new JLabel("Connected to "
+						+ mSocket.getInetAddress().getHostAddress()), "wrap");
+
+		// ////////////////////////////////////////////////////////////////////////////
+		// display the window
+		frame.pack();
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+
+		try {
+			while (true) {// this loop will only terminate when an exception is
+							// thrown (ie: connection lost)
+				this.mTextArea.appendToOutput(mServerIn.nextLine() + "\n",
+						Color.BLACK, false);
+				frame.toFront();
+			}
+		} catch (NoSuchElementException e) {
+			frame.setVisible(false);
+			JOptionPane.showMessageDialog(null,
+					"Connection with server lost, quitting");
+			System.exit(0);
+		}
+	}
+}
